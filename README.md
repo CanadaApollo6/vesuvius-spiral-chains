@@ -117,7 +117,7 @@ uv run python eval/spiral_eval.py --help
 | `tools/` | The chain algorithm (`auto_windings.py`), its two small step models (`*.json`), the check viewer and helpers |
 | `eval/` | Fit scoring, label audits, method tables, the Kelly head-to-head |
 | `spiral/` | Driver scripts and arm configs (`arms/*.env`) for the villa fits, and the fitter patches (`patches/`) |
-| `release/` | Figure scripts, the figures, `AUTOWIND.md`, the villa docs patch, and frozen copies of scored code (`frozen/`) |
+| `release/` | Figure scripts, the figures, `AUTOWIND.md`, the villa docs patch, frozen copies of scored code (`frozen/`), and the set builders and scorers of tests 13, the structure ablation and KP chains (`scored/`; their outputs stay private) |
 | `sim/`, `forward/`, `train/`, `scripts/`, `cloud/` | Earlier work: a synthetic scroll simulator, a CT forward model, surface-model training and data scripts, pod setup |
 | `notes/` | Pre-registrations and results, one dated note per piece of work |
 
