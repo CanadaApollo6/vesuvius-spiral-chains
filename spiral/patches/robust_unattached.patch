@@ -1,0 +1,338 @@
+diff --git i/volume-cartographer/scripts/spiral/config.py w/volume-cartographer/scripts/spiral/config.py
+index 62bd6b4..14b139a 100644
+--- i/volume-cartographer/scripts/spiral/config.py
++++ w/volume-cartographer/scripts/spiral/config.py
+@@ -17,6 +17,7 @@ _ENUMS = {
+     "dt_target_mode": ["strip_median", "whole_object_quantile"],
+     "dense_spacing_density_lambda": [
+         "inverse_gap", "soft_mass", "soft_mass_wide"],
++    "unattached_pcl_robust_mode": ["off", "cut"],
+ }
+ 
+ _NULL_TYPES = {
+@@ -30,6 +31,7 @@ _NULL_TYPES = {
+ }
+ 
+ _PREPARED_INPUT_FIELDS = {
++    "unattached_pcl_point_weights",
+     "patch_erode_patches",
+     "patch_uuid_filter_regex",
+     "patch_2d_sampling_max_area",
+@@ -397,6 +399,32 @@ class Config:
+         # sampling a chain walk through a link component in the
+         # unattached-strip loss.
+         self.loss_fiber_link_branch_probability = 0.5
++        # Robust ("self-cleaning") unattached strips. All off by default; with the
++        # defaults the strip loss is computed exactly as before.
++        # unattached_pcl_point_weights: read an optional per-point "w" (default 1)
++        # from the point-collection JSON and use it as a per-point weight in the
++        # strip radius and DT losses (weighted row mean / weighted p-norm).
++        self.unattached_pcl_point_weights = False
++        # unattached_pcl_robust_mode = "cut": at robust_start_step (and then every
++        # robust_update_interval steps; 0 = decide once and freeze) evaluate every
++        # strip under the current fit, flag consecutive-point steps whose fitted
++        # winding difference departs from the annotated one by >= robust_step_threshold
++        # windings, and cut the strip at distrusted steps (a flagged step when
++        # robust_window = 0, else every step whose flagged fraction within
++        # +-robust_window steps is >= robust_window_threshold). Pieces with fewer
++        # than robust_min_piece_points points are dropped. Decisions always start
++        # from the original strips. Strips carrying fiber-link junctions are not cut.
++        # robust_warmup_scale multiplies the strip losses before robust_start_step
++        # (0 = chain-free warm-up, so the first decision is made by a fit that has
++        # not seen the strips).
++        self.unattached_pcl_robust_mode = "off"
++        self.unattached_pcl_robust_start_step = 10000
++        self.unattached_pcl_robust_update_interval = 0
++        self.unattached_pcl_robust_warmup_scale = 1.0
++        self.unattached_pcl_robust_step_threshold = 0.5
++        self.unattached_pcl_robust_window = 0
++        self.unattached_pcl_robust_window_threshold = 0.4
++        self.unattached_pcl_robust_min_piece_points = 2
+         self.loss_weight_track_radius = 50.0
+         self.loss_weight_track_dt = 10.0
+         self.loss_weight_sym_dirichlet = 10.0
+diff --git i/volume-cartographer/scripts/spiral/fit_spiral.py w/volume-cartographer/scripts/spiral/fit_spiral.py
+index 48347c8..37ab69d 100644
+--- i/volume-cartographer/scripts/spiral/fit_spiral.py
++++ w/volume-cartographer/scripts/spiral/fit_spiral.py
+@@ -445,6 +445,11 @@ def get_or_build_unattached_pcl_flat(pcl_strips, device):
+     flat = getattr(pcl_strips, 'flat', None)
+     if flat is None and len(pcl_strips) > 0:
+         flat = _build_strip_flat_bundle(((s['zyxs'], s['windings']) for s in pcl_strips), device)
++        # Per-point weights (unattached_pcl_point_weights / robust cuts): present only
++        # when every strip carries them; otherwise the bundle is exactly as before.
++        if flat is not None and all('weights' in s for s in pcl_strips):
++            flat['weights'] = torch.from_numpy(np.concatenate(
++                [np.asarray(s['weights'], dtype=np.float32) for s in pcl_strips])).to(device=device)
+         try:
+             pcl_strips.flat = flat
+         except AttributeError:
+@@ -452,6 +457,89 @@ def get_or_build_unattached_pcl_flat(pcl_strips, device):
+     return flat
+ 
+ 
++def compute_unattached_robust_cuts(slice_to_spiral_transform, dr_per_winding, pcl_strips, cfg):
++    # Robust ("self-cleaning") strips: evaluate every strip under the current fit and
++    # return, per strip, the indices k of the consecutive-point steps (k -> k+1) to
++    # cut. A step is flagged when its fitted winding difference departs from the
++    # annotated one by >= unattached_pcl_robust_step_threshold windings, i.e. when
++    # |delta(normalised shifted radius)| / dr >= threshold (the annotation is already
++    # subtracted in the normalised radius). With unattached_pcl_robust_window = W > 0
++    # a step is cut when the flagged fraction over steps k-W..k+W (clipped to the
++    # strip) is >= unattached_pcl_robust_window_threshold, otherwise every flagged
++    # step is cut. Strips carrying fiber-link junctions are never cut.
++    from satisfaction_metrics import _build_strip_spiral_context
++    num_strips = len(pcl_strips)
++    empty = [np.zeros(0, dtype=np.int64) for _ in range(num_strips)]
++    stats = {'strips': num_strips, 'steps': 0, 'flagged_steps': 0, 'cut_steps': 0, 'cut_strips': 0}
++    if num_strips == 0:
++        return empty, stats
++    flat = _build_strip_flat_bundle(((s['zyxs'], s['windings']) for s in pcl_strips), dr_per_winding.device)
++    with torch.no_grad():
++        ctx, _, _ = _build_strip_spiral_context(slice_to_spiral_transform, dr_per_winding, flat, num_strips)
++        if ctx is None:
++            return empty, stats
++        nr = (ctx['normalised_radii'] / ctx['dr']).double().cpu().numpy()
++    starts = flat['starts_cpu'].numpy()
++    step_threshold = float(cfg['unattached_pcl_robust_step_threshold'])
++    window = int(cfg['unattached_pcl_robust_window'])
++    window_threshold = float(cfg['unattached_pcl_robust_window_threshold'])
++    cuts = []
++    for i, strip in enumerate(pcl_strips):
++        lo, hi = int(starts[i]), int(starts[i + 1])
++        if hi - lo < 2:
++            cuts.append(np.zeros(0, dtype=np.int64))
++            continue
++        flagged = np.abs(np.diff(nr[lo:hi])) >= step_threshold
++        stats['steps'] += len(flagged)
++        stats['flagged_steps'] += int(flagged.sum())
++        if strip.get('link_points'):
++            cuts.append(np.zeros(0, dtype=np.int64))
++            continue
++        if window > 0:
++            csum = np.concatenate([[0], np.cumsum(flagged)])
++            k = np.arange(len(flagged))
++            w_lo = np.maximum(k - window, 0)
++            w_hi = np.minimum(k + window + 1, len(flagged))
++            cut = (csum[w_hi] - csum[w_lo]) / (w_hi - w_lo) >= window_threshold
++        else:
++            cut = flagged
++        cut_idx = np.nonzero(cut)[0].astype(np.int64)
++        stats['cut_steps'] += len(cut_idx)
++        stats['cut_strips'] += int(len(cut_idx) > 0)
++        cuts.append(cut_idx)
++    return cuts, stats
++
++
++def split_unattached_strips(pcl_strips, sampling_groups, cuts, min_piece_points):
++    # Split each strip at its cut steps (step k separates points k and k+1); pieces
++    # with fewer than max(2, min_piece_points) points are dropped. Uncut strips are
++    # passed through unchanged (same dict). Pieces keep the strip's id and sampling
++    # group, and carry 'robust_piece' (piece index within the strip).
++    pieces, groups = [], []
++    min_points = max(2, int(min_piece_points))
++    for strip, group, cut in zip(pcl_strips, sampling_groups, cuts):
++        if len(cut) == 0:
++            if len(strip['zyxs']) >= min_points:
++                pieces.append(strip)
++                groups.append(group)
++            continue
++        n = len(strip['zyxs'])
++        bounds = [0] + [int(k) + 1 for k in cut] + [n]
++        for piece_idx, (lo, hi) in enumerate(zip(bounds[:-1], bounds[1:])):
++            if hi - lo < min_points:
++                continue
++            piece = dict(strip)
++            piece['zyxs'] = strip['zyxs'][lo:hi]
++            piece['windings'] = strip['windings'][lo:hi]
++            if 'weights' in strip:
++                piece['weights'] = strip['weights'][lo:hi]
++            piece['link_points'] = {}
++            piece['robust_piece'] = piece_idx
++            pieces.append(piece)
++            groups.append(group)
++    return pieces, groups
++
++
+ def get_progressive_dt_max_winding(cfg, iteration, dt_start_step, shell_outer_winding_idx):
+     # When `dt_progressive_windings` is set, the DT losses (patch, track, unattached-pcl) only act
+     # on tracks/patches whose snapped spiral-space winding is <= the returned cutoff. The cutoff
+@@ -1050,6 +1138,64 @@ class FitContext:
+                     self.unattached_strip_sampling_groups[idx])
+                 self.unattached_component_edges.append([])
+ 
++    def _maybe_update_unattached_robust(self, iteration):
++        """Robust strips (unattached_pcl_robust_mode = "cut"): at robust_start_step
++        and then every robust_update_interval steps (0 = once, then frozen) re-cut
++        the original strips by their disagreement with the current fit and swap the
++        pieces in as the strip pool. A frozen decision is written next to the
++        checkpoints (unattached_robust_cuts.json) and reused on resume, so a resumed
++        run does not re-decide with a fit that has since seen the strips."""
++        cfg = self.config
++        if cfg['unattached_pcl_robust_mode'] == 'off' or iteration < cfg['unattached_pcl_robust_start_step']:
++            return
++        every = int(cfg['unattached_pcl_robust_update_interval'])
++        last = getattr(self, '_robust_last_update', None)
++        if last is not None and (every <= 0 or iteration - last < every):
++            return
++        if not hasattr(self, '_robust_orig_strips'):
++            self._robust_orig_strips = list(self.unattached_pcl_strips)
++            self._robust_orig_groups = list(self.unattached_strip_sampling_groups)
++        orig = self._robust_orig_strips
++        sidecar = os.path.join(self.out_path, 'unattached_robust_cuts.json')
++        cuts = None
++        if every <= 0:
++            resume_dir = os.path.dirname(os.environ.get('FIT_SPIRAL_RESUME_PATH') or '')
++            for path in (sidecar, os.path.join(resume_dir, 'unattached_robust_cuts.json') if resume_dir else None):
++                if path and os.path.isfile(path):
++                    with open(path) as f:
++                        saved = json.load(f)
++                    if saved.get('num_strips') == len(orig):
++                        cuts = [np.asarray(c, dtype=np.int64) for c in saved['cuts']]
++                        print(f'[robust] step {iteration}: reusing the cut decision made at step '
++                              f'{saved["iteration"]} ({path})', flush=True)
++                        break
++        if cuts is None:
++            cuts, stats = compute_unattached_robust_cuts(
++                self.spiral_and_transform.get_slice_to_spiral_transform(),
++                self.spiral_and_transform.get_dr_per_winding(), orig, cfg)
++            print(f'[robust] step {iteration}: {stats["flagged_steps"]}/{stats["steps"]} steps disagree with the '
++                  f'fit by >= {cfg["unattached_pcl_robust_step_threshold"]} windings; cutting {stats["cut_steps"]} '
++                  f'steps in {stats["cut_strips"]}/{stats["strips"]} strips', flush=True)
++            if self.dist.is_main_process:
++                tmp = sidecar + '.tmp'
++                with open(tmp, 'w') as f:
++                    json.dump({'iteration': int(iteration), 'num_strips': len(orig), 'stats': stats,
++                               'config': {k: cfg[k] for k in cfg.keys() if k.startswith('unattached_pcl_robust_')},
++                               'cuts': [c.tolist() for c in cuts]}, f)
++                os.replace(tmp, sidecar)
++        pieces, groups = split_unattached_strips(
++            orig, self._robust_orig_groups, cuts, cfg['unattached_pcl_robust_min_piece_points'])
++        n_orig = int(sum(len(s['zyxs']) for s in orig))
++        n_kept = int(sum(len(s['zyxs']) for s in pieces))
++        self.unattached_pcl_strips[:] = pieces
++        self.unattached_pcl_strips.flat = None
++        self.unattached_strip_sampling_groups[:] = groups
++        self._rebuild_pcl_sampling_strata()
++        self.dt_target_cache_manager.reset()
++        self._robust_last_update = iteration
++        print(f'[robust] step {iteration}: {len(orig)} strips -> {len(pieces)} pieces, '
++              f'{n_kept}/{n_orig} points kept', flush=True)
++
+     def load_host_inputs(self):
+         """Load and prepare every host-side input for a fit.
+ 
+@@ -1448,6 +1594,9 @@ class FitContext:
+                 'windings': windings,
+                 'link_points': link_points,
+             })
++            if self.config['unattached_pcl_point_weights']:
++                point_weights = np.array([point.get('weight', 1.0) for _, point in sorted_items], dtype=np.float32)
++                unattached_pcl_strips[-1]['weights'] = point_weights[keep]
+             unattached_strip_sampling_groups.append(pcl['sampling_group'])
+ 
+         cross_patch_pcls = list(cross_patch_point_collections.values())
+@@ -3375,6 +3524,7 @@ class FitContext:
+         self.unverified_patch_atlas = rebuilt_unverified_atlas
+ 
+     def step(self, iteration):
++        self._maybe_update_unattached_robust(iteration)
+         self.step_timer.start('fwd')
+         flow_field_high_res_lr_scale = self._apply_high_res_lr_scale(iteration)
+ 
+@@ -3670,8 +3820,15 @@ class FitContext:
+                     for name, value in self.sdt_volume['store'].last_timings.items()
+                 })
+ 
++        unattached_radius_weight = self.config['loss_weight_unattached_pcl_radius']
++        unattached_dt_weight = self.config['loss_weight_unattached_pcl_dt']
++        if (self.config['unattached_pcl_robust_mode'] != 'off'
++                and iteration < self.config['unattached_pcl_robust_start_step']):
++            # Robust-strip warm-up: scale (0 = skip) the strip losses until the first cut decision.
++            unattached_radius_weight = unattached_radius_weight * self.config['unattached_pcl_robust_warmup_scale']
++            unattached_dt_weight = unattached_dt_weight * self.config['unattached_pcl_robust_warmup_scale']
+         if (
+-            (self.config['loss_weight_unattached_pcl_radius'] > 0 or self.config['loss_weight_unattached_pcl_dt'] > 0)
++            (unattached_radius_weight > 0 or unattached_dt_weight > 0)
+             and self.unattached_pcl_strips
+         ):
+             unattached_loss_values = get_unattached_pcl_strip_losses(
+@@ -3690,8 +3847,8 @@ class FitContext:
+                 cfg=self.config,
+             )
+             backward_family({
+-                'unattached_pcl_radius': unattached_loss_values[0] * self.config['loss_weight_unattached_pcl_radius'],
+-                'unattached_pcl_dt': unattached_loss_values[1] * self.config['loss_weight_unattached_pcl_dt'],
++                'unattached_pcl_radius': unattached_loss_values[0] * unattached_radius_weight,
++                'unattached_pcl_dt': unattached_loss_values[1] * unattached_dt_weight,
+             })
+             del unattached_loss_values
+ 
+diff --git i/volume-cartographer/scripts/spiral/losses.py w/volume-cartographer/scripts/spiral/losses.py
+index b7d33e3..00f3cac 100644
+--- i/volume-cartographer/scripts/spiral/losses.py
++++ w/volume-cartographer/scripts/spiral/losses.py
+@@ -1554,6 +1554,8 @@ def get_unattached_pcl_strip_losses(
+     sampled_flat_indices_t = torch.from_numpy(sampled_flat_indices).to(device=device)
+     zyxs_t = flat['zyxs'][sampled_flat_indices_t]
+     winding_t = flat['windings'][sampled_flat_indices_t]
++    # Optional per-point weights (cfg unattached_pcl_point_weights); None => legacy path.
++    weight_t = flat['weights'][sampled_flat_indices_t] if 'weights' in flat else None
+ 
+     spiral_zyxs = slice_to_spiral_transform(zyxs_t.reshape(-1, 3)).reshape(*zyxs_t.shape)
+     theta, _, shifted_radii = get_theta_and_radii(spiral_zyxs[..., 1:], dr_per_winding)
+@@ -1567,10 +1569,17 @@ def get_unattached_pcl_strip_losses(
+     radius_hinge_margin = dr_per_winding.detach() * cfg['patch_radius_loss_margin']
+     dt_hinge_margin = dr_per_winding.detach() * cfg['patch_dt_loss_margin']
+ 
+-    mean_radii = normalised_radii.mean(dim=-1, keepdim=True)
++    if weight_t is None:
++        mean_radii = normalised_radii.mean(dim=-1, keepdim=True)
++    else:
++        mean_radii = ((normalised_radii * weight_t).sum(dim=-1, keepdim=True)
++                      / weight_t.sum(dim=-1, keepdim=True).clamp(min=1e-12))
+     radius_deviations = (normalised_radii - mean_radii).abs()
+     radius_point_residuals = F.relu(radius_deviations - radius_hinge_margin)
+-    radius_loss = radius_point_residuals.mean()
++    if weight_t is None:
++        radius_loss = radius_point_residuals.mean()
++    else:
++        radius_loss = (radius_point_residuals * weight_t).sum() / weight_t.sum().clamp(min=1e-12)
+     if diagnostics_enabled():
+         radius_target_shifted = mean_radii + winding_t * dr_per_winding
+         radius_target_radii = radius_from_unwrapped_shifted(
+@@ -1614,11 +1623,18 @@ def get_unattached_pcl_strip_losses(
+     across_p = cfg['patch_dt_norm_p']
+     point_distances = torch.linalg.norm(zyxs_t - target_scroll_zyxs, dim=-1)
+     point_distances = F.relu(point_distances - dt_hinge_margin) + 1.e-5
+-    track_losses = (point_distances ** within_p).mean(dim=-1) ** (1 / within_p)
++    if weight_t is None:
++        track_losses = (point_distances ** within_p).mean(dim=-1) ** (1 / within_p)
++    else:
++        track_losses = ((point_distances ** within_p * weight_t).sum(dim=-1)
++                        / weight_t.sum(dim=-1).clamp(min=1e-12)) ** (1 / within_p)
+     # Progressive DT: only strips whose snapped (raw, spiral-space) winding is within the current
+     # cutoff contribute. Use shifted_radii (the strip's actual spiral position), not normalised_radii.
+     strip_snapped_winding = torch.round(shifted_radii.median(dim=-1).values / dr_per_winding) * dr_per_winding
+     active_mask = _progressive_dt_active_mask(strip_snapped_winding, dr_per_winding, dt_max_winding)
++    if weight_t is not None:
++        rows_with_weight = weight_t.sum(dim=-1) > 0
++        active_mask = rows_with_weight if active_mask is None else (active_mask & rows_with_weight)
+     dt_loss = _aggregate_dt_track_losses(track_losses, across_p, active_mask)
+     record_loss_samples(
+         'unattached_pcl_dt', spiral_zyxs, point_distances,
+diff --git i/volume-cartographer/scripts/spiral/point_collection.py w/volume-cartographer/scripts/spiral/point_collection.py
+index eb968a8..ac65798 100644
+--- i/volume-cartographer/scripts/spiral/point_collection.py
++++ w/volume-cartographer/scripts/spiral/point_collection.py
+@@ -67,6 +67,10 @@ def load_point_collection(filename: str) -> Optional[Dict[int, Dict[str, Any]]]:
+                     "winding_annotation": point_data.get("wind_a") if point_data.get("wind_a") is not None else float('nan'),
+                     "creation_time": point_data.get("creation_time", 0)
+                 }
++                # Optional per-point confidence weight; only used by the unattached-strip
++                # loss when unattached_pcl_point_weights is set. Absent => key not added.
++                if point_data.get("w") is not None:
++                    point["weight"] = float(point_data["w"])
+                 collection["points"][point_id] = point
+ 
+             collections[collection_id] = collection

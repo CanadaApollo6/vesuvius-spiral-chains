@@ -1,0 +1,28 @@
+[project]
+name = "vesuvius-spiral-chains"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.14.5",
+    "connected-components-3d>=4.1.0",
+    "fsspec>=2026.9.0",
+    "imagecodecs>=2026.10.10",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.4",
+    "s3fs>=2026.9.0",
+    "scikit-image>=0.26.0",
+    "scipy>=1.18.1",
+    "tifffile>=2026.10.15",
+    "torch>=2.14.1",
+    "zarr>=3.4.1",
+]
+
+# Editable install of tools/autowind so `uv run python -m autowind ...` works from anywhere in the repo
+# (release/AUTOWIND.md). uv_build's editable install puts tools/ on sys.path; nothing else changes.
+[build-system]
+requires = ["uv_build>=0.9,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "tools"
+module-name = "autowind"

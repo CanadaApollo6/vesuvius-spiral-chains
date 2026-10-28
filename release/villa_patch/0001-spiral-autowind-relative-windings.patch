@@ -1,0 +1,129 @@
+# villa 0fb38c45 patch: docs + checker for autowind relative_windings.json (no fitter code change).
+# Apply in the villa repo root: git apply 0001-spiral-autowind-relative-windings.patch
+diff --git i/volume-cartographer/scripts/spiral/AUTOWIND.md w/volume-cartographer/scripts/spiral/AUTOWIND.md
+new file mode 100644
+index 0000000..fa040f8
+--- /dev/null
++++ w/volume-cartographer/scripts/spiral/AUTOWIND.md
+@@ -0,0 +1,48 @@
++# Automatic relative-winding chains (autowind) as fitter input
++
++`autowind` (Vesuvius Challenge community tool) turns a binary surface-mask OME-Zarr and an `umbilicus.json` into
++`relative_windings.json`: one point collection per radial chain of sheet crossings, with cumulative `wind_a`
++(0, 1, 2, ... outward). The fitter at this commit already consumes this format. **No code change is needed.** This
++note and `check_relative_windings.py` explain how to load the file and which config keys matter.
++
++## Loading
++
++The file is a standard `vc_pointcollections_json_version: "1"` document. The fitter picks it up in either of two ways:
++
++* **Conventional path:** put the file at `<dataset>/relative_windings.json`. `fit_session.PCL_ROLE_CONVENTIONS` maps
++  that name to `PclRole.RELATIVE`.
++* **Explicit path:** list it under `paths.pcls` with `"role": "relative"`.
++
++Any file name other than `abs_winding.json` is read as relative (`winding_is_absolute = False`). Every point carries
++`wind_a`, so `normalise_pcl_winding_annotations` keeps all of them.
++
++Points that are not attached to a verified patch become **unattached strips** (`get_unattached_pcl_strip_losses`).
++With `input_disable_patches = true`, which is how the chains were validated, every point is unattached.
++
++## Required overrides
++
++```sh
++FIT_SPIRAL_CONFIG_OVERRIDES='{"pcl_unattached_pcl_min_point_spacing": 0.0,
++                              "loss_weight_unattached_pcl_radius": 10.0, ...}' \
++python fit_spiral.py --dataset <dataset>
++```
++
++* `pcl_unattached_pcl_min_point_spacing = 0`. The default of 16 vox greedily drops strip points closer than 16 vox.
++  Chain points are consecutive sheet crossings, about one sheet pitch apart (~16 vox on PHerc0139, ~26 vox on
++  PHerc1667 at ~9.5 um). The default would drop 22 % and 13.7 % of the points, and with them winding steps.
++* `loss_weight_unattached_pcl_radius = 10` (default 2). This weight was validated on PHerc0139 and PHerc1667.
++  A wrong step shifts every later point of its chain by one turn, so the weight trades chain errors against the
++  other losses. Only global weights exist; per-step confidences in the chain file are not used.
++
++The coordinates are `p = [x, y, z]` in the voxel frame of the mask, which must be the fit frame. Pass the fitter the
++same umbilicus that autowind used: autowind writes it as `umbilicus_maskframe.json`.
++
++## Check before fitting
++
++```sh
++python check_relative_windings.py <dataset>/relative_windings.json [--umbilicus <dataset>/umbilicus.json]
++```
++
++The script parses the file with this commit's `point_collection` loader and checks that `wind_a` never decreases
++within a chain. It also reports how many points the default 16-vox spacing would drop. With `--umbilicus`, it adds
++the largest angular jump between consecutive points (a chain is one radial ray, so this should be near 0).
+diff --git i/volume-cartographer/scripts/spiral/check_relative_windings.py w/volume-cartographer/scripts/spiral/check_relative_windings.py
+new file mode 100644
+index 0000000..31a3745
+--- /dev/null
++++ w/volume-cartographer/scripts/spiral/check_relative_windings.py
+@@ -0,0 +1,67 @@
++#!/usr/bin/env python3
++"""Check a relative_windings.json (e.g. from autowind) with this commit's point-collection loader.
++
++    python check_relative_windings.py relative_windings.json [--umbilicus umbilicus.json] [--spacing 16]
++
++Reports: collections, points, all points annotated, chains whose wind_a decreases (must be 0), points the
++default pcl_unattached_pcl_min_point_spacing would drop (use 0 for autowind chains), and with --umbilicus the largest
++angular jump between consecutive chain points. Exit status 1 if the file does not load or any wind_a decreases.
++"""
++import argparse
++import json
++import sys
++
++import numpy as np
++
++from point_collection import load_point_collection, normalise_pcl_winding_annotations
++from umbilicus import json_umbilicus_z_to_yx
++
++
++def decimate_keep(zyx, min_spacing):
++    # same greedy rule as spiral_helpers._decimate_ordered_points_min_spacing (last point forced, as fit_spiral does)
++    if min_spacing <= 0 or len(zyx) <= 1:
++        return len(zyx)
++    keep, last = 1, zyx[0]
++    for i in range(1, len(zyx)):
++        if i == len(zyx) - 1 or np.linalg.norm(zyx[i] - last) >= min_spacing:
++            keep, last = keep + 1, zyx[i]
++    return keep
++
++
++def main():
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    ap.add_argument("json")
++    ap.add_argument("--umbilicus", default=None)
++    ap.add_argument("--spacing", type=float, default=16.0, help="min point spacing to evaluate (config default 16)")
++    a = ap.parse_args()
++    cols = load_point_collection(a.json)
++    if not cols:
++        print(f"could not load {a.json}")
++        return 1
++    normalise_pcl_winding_annotations(cols)
++    umb = json_umbilicus_z_to_yx(a.umbilicus) if a.umbilicus else None
++    n_pts = bad = dropped = 0
++    dth = 0.0
++    for c in cols.values():
++        pts = [p for _, p in sorted(c["points"].items(), key=lambda kv: int(kv[0]))]
++        w = np.array([p["winding_annotation"] for p in pts], float)
++        zyx = np.array([[p["p"][2], p["p"][1], p["p"][0]] for p in pts], float)
++        n_pts += len(pts)
++        bad += int((np.diff(w) < 0).any())
++        dropped += len(pts) - decimate_keep(zyx, a.spacing)
++        if umb is not None and len(pts) > 1:
++            yx = umb(zyx[:, 0])
++            th = np.unwrap(np.arctan2(zyx[:, 1] - yx[:, 0], zyx[:, 2] - yx[:, 1]))
++            dth = max(dth, float(np.abs(np.diff(th)).max()))
++    s = dict(collections=len(cols), points=n_pts,
++             all_annotated=all(c["has_winding_annotations"] for c in cols.values()),
++             chains_with_decreasing_wind_a=bad, points_dropped_at_spacing=dropped, spacing=a.spacing,
++             frac_dropped=round(dropped / max(n_pts, 1), 3))
++    if umb is not None:
++        s["max_consecutive_dtheta_rad"] = round(dth, 4)
++    print(json.dumps(s, indent=1))
++    return 1 if bad else 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())

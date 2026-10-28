@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sheet count check</title>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --fg:#e6e6e6; --dim:#9aa0a8; --acc:#4fc3f7; --a:#22e0e0; --b:#ffa726; --mid:#ff4d4d; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:15px/1.4 system-ui, sans-serif; overflow:hidden; }
+  header { height:46px; display:flex; align-items:center; gap:16px; padding:0 14px; background:#0f1114; border-bottom:1px solid #2a2e35; }
+  header .title { font-weight:600; }
+  #progwrap { flex:1; height:12px; background:#2a2e35; border-radius:6px; overflow:hidden; }
+  #prog { height:100%; width:0; background:var(--acc); transition:width .2s; }
+  #progtxt { min-width:150px; text-align:right; color:var(--dim); font-variant-numeric:tabular-nums; }
+  #timer { font-variant-numeric:tabular-nums; color:var(--dim); min-width:120px; text-align:right; }
+  #timer.late { color:#ffa726; }
+  #res { padding:2px 8px; border-radius:4px; background:#2a2e35; font-size:13px; }
+  #res.hi { background:#7b4dff; color:white; }
+  main { display:grid; grid-template-columns: auto auto 330px; gap:10px; padding:10px; height:calc(100% - 46px); }
+  .col { display:flex; flex-direction:column; gap:8px; min-width:0; }
+  .pane { background:var(--panel); border-radius:6px; padding:6px; position:relative; }
+  .pane h3 { margin:0 0 4px 2px; font-size:12px; font-weight:500; color:var(--dim); text-transform:uppercase; letter-spacing:.04em; }
+  .imgbox { position:relative; line-height:0; }
+  .imgbox img { display:block; width:100%; height:100%; image-rendering:auto; }
+  .imgbox svg { position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; }
+  canvas { display:block; }
+  #side { background:var(--panel); border-radius:6px; padding:14px; display:flex; flex-direction:column; gap:12px; overflow:auto; }
+  #q { font-size:17px; font-weight:600; }
+  #qsub { color:var(--dim); font-size:13px; margin-top:-6px; }
+  .btns { display:grid; grid-template-columns: repeat(7, 1fr); gap:5px; }
+  .btns button { font-size:20px; padding:10px 0; border-radius:6px; border:1px solid #3a3f48; background:#262a31; color:var(--fg); cursor:pointer; }
+  .btns button small { display:block; font-size:10px; color:var(--dim); }
+  .btns button.sel { background:var(--acc); color:#000; border-color:var(--acc); }
+  .btns button.sel small { color:#000; }
+  .keys { font-size:13px; color:var(--dim); }
+  .keys kbd { background:#2a2e35; border:1px solid #3a3f48; border-radius:3px; padding:0 5px; color:var(--fg); font-size:12px; }
+  .keys div { margin:2px 0; }
+  .tips { font-size:13px; color:#c8ccd2; border-top:1px solid #2a2e35; padding-top:8px; }
+  .tips li { margin:3px 0; }
+  #msg { min-height:20px; font-size:13px; color:var(--dim); }
+  #overlay { position:fixed; inset:0; background:rgba(10,11,13,.96); display:none; align-items:center; justify-content:center; z-index:10; }
+  #overlay .card { max-width:820px; background:var(--panel); border-radius:10px; padding:26px 30px; font-size:16px; line-height:1.55; }
+  #overlay h2 { margin-top:0; }
+  #reveal { display:none; border:2px solid var(--mid); border-radius:6px; padding:10px; font-size:14px; background:#2a1c1f; }
+  #reveal.ok { border-color:#43a047; background:#1b2a1d; }
+  #reveal b.big { font-size:18px; }
+  .legend span { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+  #loading { position:absolute; inset:0; display:none; align-items:center; justify-content:center; color:var(--dim); font-size:18px; background:rgba(20,22,26,.6); line-height:1.4; }
+</style>
+</head>
+<body>
+<header>
+  <span class="title">Sheet count check</span>
+  <span id="mode" style="color:var(--dim)"></span>
+  <div id="progwrap"><div id="prog"></div></div>
+  <span id="progtxt"></span>
+  <span id="timer" title="item time used (clock runs only while an item is on screen)"></span>
+  <span id="res">9.4 µm</span>
+</header>
+<main>
+  <div class="col" id="colA">
+    <div class="pane"><h3>Slice seen from above (horizontal cut through the scroll)</h3>
+      <div class="imgbox" id="boxAx"><img id="imAx" alt=""><svg id="svAx"></svg><div id="loading">loading…</div></div></div>
+    <div class="pane"><h3>Brightness along the line (A → B)</h3><canvas id="prof"></canvas></div>
+  </div>
+  <div class="col" id="colB">
+    <div class="pane"><h3>Side view: vertical cut along the line (up = higher z)</h3>
+      <div class="imgbox" id="boxRz"><img id="imRz" alt=""><svg id="svRz"></svg></div></div>
+    <div class="pane tips" id="tipsPane">
+      <b>Reading the picture</b>
+      <ul style="margin:4px 0 0 18px;padding:0">
+        <li>Bright bands = papyrus sheets. Dark = air gaps.</li>
+        <li><span style="color:var(--a)">A</span> and <span style="color:var(--b)">B</span> each sit on a sheet. Do <b>not</b> count those two.</li>
+        <li>Count sheets that cross the corridor between A and B.</li>
+        <li>Follow each sheet from far away into the corridor: two sheets that merge into one thick band still count as two.</li>
+        <li>The side view shows the same sheets from another angle; they often separate there.</li>
+        <li>A ring on a <b>double band</b> (two sheets touching)? Take the ring as sitting on the <b>left</b> sheet of
+          the pair. So the right sheet of A's pair counts as between; the right sheet of B's pair does not.</li>
+      </ul>
+    </div>
+  </div>
+  <div id="side">
+    <div id="q">How many sheets lie between A and B?</div>
+    <div id="qsub">Not counting the sheets that A and B sit on.</div>
+    <div class="btns" id="btns">
+      <button data-a="0">0<small>none</small></button>
+      <button data-a="1">1</button>
+      <button data-a="2">2</button>
+      <button data-a="3">3</button>
+      <button data-a="s">s<small>same sheet</small></button>
+      <button data-a="u">?<small>unsure</small></button>
+      <button data-a="a">a<small>open air</small></button>
+    </div>
+    <div id="reveal"></div>
+    <div id="msg"></div>
+    <div class="keys">
+      <div><kbd>0</kbd>…<kbd>9</kbd> number of sheets between, <kbd>u</kbd> unsure</div>
+      <div><kbd>s</kbd> A and B are on the <i>same</i> sheet (rare)</div>
+      <div><kbd>a</kbd> A or B sits in open air, not on a sheet</div>
+      <div><kbd>←</kbd> / <kbd>Backspace</kbd> back &nbsp; <kbd>→</kbd> forward (answered items)</div>
+      <div><kbd>h</kbd> 2.4 µm view on/off (optional; see tips)</div>
+      <div><kbd>o</kbd> hide/show markers &nbsp; <kbd>c</kbd> contrast / darker &nbsp; <kbd>t</kbd> tutorial</div>
+    </div>
+    <div class="tips">
+      <b>2.4 µm view</b>: 4x finer. Each sheet shows its fibres as several thin bright stripes with dark lines between
+      them, so <b>one sheet can look like two or three</b>. Use it only to confirm a contact you already suspect.
+    </div>
+    <div class="legend keys"><span style="background:var(--a)"></span>A <span style="background:var(--b);margin-left:10px"></span>B
+      <span style="background:var(--mid);margin-left:10px"></span>sheets between (tutorial only)</div>
+  </div>
+</main>
+<div id="overlay"><div class="card" id="card"></div></div>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const st = { n:0, ids:[], answers:{}, pos:0, mode:"main", hires:false, overlay:true, contrast:0,
+             tut:null, tutIdx:0, tutAnswered:false, cur:null, t0:null, hiresOpened:false, revisit:false,
+             metaCache:{}, busy:false, timeCap:null, usedS:0 };
+const CONTRASTS = ["contrast(1)", "contrast(1.4)", "brightness(0.7) contrast(1.25)", "brightness(0.55) contrast(1.6)"];
+
+async function api(path, body) {
+  const r = await fetch(path, body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : {});
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j;
+}
+
+function preloadImgs(m) {
+  for (const k in m.imgs) { const im = new Image(); im.src = m.imgs[k]; }
+}
+function itemMeta(pos) {
+  if (!st.metaCache[pos]) st.metaCache[pos] = api("/api/item/" + pos).then(m => { preloadImgs(m); return m; });
+  return st.metaCache[pos];
+}
+function prefetch(pos) { for (let p = pos + 1; p <= Math.min(pos + 4, st.n - 1); p++) itemMeta(p); }
+
+// ---- layout ---------------------------------------------------------------------------------------------
+function layout(m) {
+  const side = 330, gap = 10, pad = 20;
+  const availW = window.innerWidth - side - 2 * gap - pad - 24;
+  const availH = window.innerHeight - 46 - pad - 300; // leave room for profile
+  const ar = m.H / m.W;
+  let w = Math.floor(availW / 2);
+  if (w * ar > availH) w = Math.floor(availH / ar);
+  for (const id of ["boxAx", "boxRz"]) { $(id).style.width = w + "px"; $(id).style.height = Math.round(w * ar) + "px"; }
+  const c = $("prof"); c.width = w; c.height = 190; c.style.width = w + "px";
+  $("tipsPane").style.width = (w + 12) + "px";
+}
+
+// ---- drawing --------------------------------------------------------------------------------------------
+function svgMarkers(svg, m, mids) {
+  const W = m.W, H = m.H, L = m.L, s = W / 220;  // stroke scale
+  svg.setAttribute("viewBox", `${-W/2} ${-H/2} ${W} ${H}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  let g = "";
+  if (st.overlay) {
+    const off = Math.max(3, W / 60);
+    for (const y of [-off, off])
+      g += `<line x1="${-L/2}" y1="${y}" x2="${L/2}" y2="${y}" stroke="#ffeb3b" stroke-opacity=".75" stroke-width="${0.9*s}" stroke-dasharray="${3*s} ${2*s}"/>`;
+    const r = Math.max(2.2, W / 70);
+    g += `<circle cx="${-L/2}" cy="0" r="${r}" fill="none" stroke="var(--a)" stroke-width="${1.4*s}"/>`;
+    g += `<circle cx="${L/2}" cy="0" r="${r}" fill="none" stroke="var(--b)" stroke-width="${1.4*s}"/>`;
+    const fs = Math.max(5, W / 24);
+    g += `<text x="${-L/2}" y="${-off - r - 1}" fill="var(--a)" font-size="${fs}" text-anchor="middle" font-weight="700" paint-order="stroke" stroke="#000" stroke-width="${0.5*s}">A</text>`;
+    g += `<text x="${L/2}" y="${-off - r - 1}" fill="var(--b)" font-size="${fs}" text-anchor="middle" font-weight="700" paint-order="stroke" stroke="#000" stroke-width="${0.5*s}">B</text>`;
+  }
+  for (const u of (mids || [])) {
+    const t = Math.max(3, W / 45);
+    g += `<path d="M ${u-t} ${-H/2} L ${u+t} ${-H/2} L ${u} ${-H/2 + 1.8*t} Z" fill="var(--mid)"/>`;
+    g += `<path d="M ${u-t} ${H/2} L ${u+t} ${H/2} L ${u} ${H/2 - 1.8*t} Z" fill="var(--mid)"/>`;
+    g += `<line x1="${u}" y1="${-H/2 + 2*t}" x2="${u}" y2="${-H/6}" stroke="var(--mid)" stroke-width="${0.8*s}" stroke-dasharray="${2*s} ${2*s}"/>`;
+    g += `<line x1="${u}" y1="${H/6}" x2="${u}" y2="${H/2 - 2*t}" stroke="var(--mid)" stroke-width="${0.8*s}" stroke-dasharray="${2*s} ${2*s}"/>`;
+  }
+  svg.innerHTML = g;
+}
+
+function drawProfile(m, mids) {
+  const c = $("prof"), ctx = c.getContext("2d"), w = c.width, h = c.height;
+  ctx.fillStyle = "#15171b"; ctx.fillRect(0, 0, w, h);
+  const W = m.W, L = m.L, X = (u) => (u + W / 2) / W * w;
+  const series = [[m.prof9, "#f0f0f0", 1.6]];
+  if (st.hires && m.prof24) series.push([m.prof24, "#b388ff", 1.1]);
+  let lo = 1e9, hi = -1e9;
+  for (const [p] of series) for (const v of p) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  const top = 14, bot = 18, Y = (v) => top + (1 - (v - lo) / Math.max(hi - lo, 1)) * (h - top - bot);
+  ctx.fillStyle = "rgba(255,235,59,.08)"; ctx.fillRect(X(-L/2), 0, X(L/2) - X(-L/2), h);
+  for (const [u, col, lab] of [[-L/2, "#22e0e0", "A"], [L/2, "#ffa726", "B"]]) {
+    ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(X(u), 0); ctx.lineTo(X(u), h); ctx.stroke();
+    ctx.fillStyle = col; ctx.font = "bold 12px system-ui"; ctx.fillText(lab, X(u) + 3, 12);
+  }
+  for (const u of (mids || [])) {
+    ctx.strokeStyle = "#ff4d4d"; ctx.setLineDash([4, 3]); ctx.beginPath(); ctx.moveTo(X(u), 0); ctx.lineTo(X(u), h); ctx.stroke(); ctx.setLineDash([]);
+  }
+  for (const [p, col, lw] of series) {
+    ctx.strokeStyle = col; ctx.lineWidth = lw; ctx.beginPath();
+    p.forEach((v, i) => { const x = X(m.prof_u0 + i * m.prof_du), y = Y(v); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+    ctx.stroke();
+  }
+  ctx.fillStyle = "#8a9099"; ctx.font = "11px system-ui";
+  ctx.fillText("peaks = bright = sheets" + (st.hires && m.prof24 ? "   (purple: 2.4 µm, fibre stripes add extra peaks)" : ""), 6, h - 4);
+  // 10-voxel scale bar (~94 µm at 9.362, ~96 µm at 9.596)
+  const sb = 10 / W * w; ctx.fillStyle = "#cfd3d8"; ctx.fillRect(w - sb - 8, h - 9, sb, 3);
+  ctx.fillText(Math.round(10 * (m.vox_um || 9.362)) + " µm", w - sb - 50, h - 4);
+}
+
+function render() {
+  const m = st.cur; if (!m) return;
+  layout(m);
+  const hi = st.hires && m.imgs.ax24;
+  $("imAx").src = hi ? m.imgs.ax24 : m.imgs.ax9;
+  $("imRz").src = hi ? (m.imgs.rz24 || m.imgs.rz9) : m.imgs.rz9;
+  const f = CONTRASTS[st.contrast];
+  $("imAx").style.filter = f; $("imRz").style.filter = f;
+  const mids = (st.mode === "tutorial" && st.tutAnswered) ? st.tut.mid_u : null;
+  svgMarkers($("svAx"), m, mids); svgMarkers($("svRz"), m, mids);
+  drawProfile(m, mids);
+  const lo = (m.vox_um || 9.362).toFixed(1) + " µm";
+  $("res").textContent = hi ? "2.4 µm" : (st.hires && !m.imgs.ax24 ? lo + " (no 2.4 µm data)" : lo);
+  $("res").className = hi ? "hi" : "";
+  const sel = st.mode === "main" ? st.answers[st.ids[st.pos]] : null;
+  for (const b of document.querySelectorAll("#btns button")) b.classList.toggle("sel", sel !== null && sel !== undefined && b.dataset.a === sel);
+}
+
+function whenLoaded() {
+  const ims = [$("imAx"), $("imRz")];
+  return Promise.all(ims.map(im => im.complete && im.naturalWidth ? Promise.resolve() : new Promise(r => { im.onload = r; im.onerror = r; })));
+}
+
+function updateProgress() {
+  const done = st.ids.filter(id => id in st.answers).length;
+  $("prog").style.width = (100 * done / Math.max(st.n, 1)) + "%";
+  $("progtxt").textContent = st.mode === "tutorial" ? `tutorial ${st.tutIdx + 1} / ${st.ntut}` : `${done} answered · item ${st.pos + 1} / ${st.n}`;
+  $("mode").textContent = st.mode === "tutorial" ? "TUTORIAL (with feedback)" : "";
+}
+
+// ---- item-time clock and cap ----------------------------------------------------------------------------
+const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+function curUsed() { return st.usedS + ((st.mode === "main" && st.t0 && !st.busy) ? (performance.now() - st.t0) / 1000 : 0); }
+function tick() {
+  if (!st.timeCap) { $("timer").textContent = ""; return; }
+  const u = curUsed();
+  $("timer").textContent = `${fmt(Math.min(u, st.timeCap))} / ${fmt(st.timeCap)}`;
+  $("timer").className = u >= st.timeCap - 120 ? "late" : "";
+}
+setInterval(tick, 500);
+function timeUp() {
+  st.mode = "done";
+  api("/api/event", {event: "time_up", used_s: st.usedS});
+  const vals = Object.values(st.answers);
+  card(`<h2>Time is up – thank you!</h2><p>You used the ${Math.round(st.timeCap / 60)} minutes of checking time and answered
+    ${vals.length} items. Your answers are saved in <code>${st.out}</code>.</p>
+    <p>You can close this tab and stop the server (Ctrl-C in the terminal). Please do not open any other output of
+    this project until the results are in.</p>`);
+}
+
+// ---- main flow ------------------------------------------------------------------------------------------
+async function show(pos) {
+  if (pos >= st.n) return finish();
+  st.busy = true; st.pos = pos; st.mode = "main"; st.revisit = st.ids[pos] in st.answers;
+  $("reveal").style.display = "none"; $("loading").style.display = "flex"; updateProgress();
+  const t = performance.now();
+  st.cur = await itemMeta(pos);
+  st.hiresOpened = st.hires;
+  render();
+  await whenLoaded();
+  $("loading").style.display = "none";
+  st.t0 = performance.now(); st.busy = false;
+  window.__lastLoadMs = st.t0 - t;
+  $("msg").textContent = st.revisit ? `already answered "${st.answers[st.ids[pos]]}" – answer again to change it` : "";
+  prefetch(pos);
+}
+
+async function answer(a) {
+  if (st.busy || !st.cur) return;
+  if (st.mode === "tutorial") return tutAnswer(a);
+  const secs = (performance.now() - st.t0) / 1000;
+  st.busy = true;
+  const r = await api("/api/answer", {pos: st.pos, answer: a, seconds: secs, hires_opened: st.hiresOpened, revisit: st.revisit});
+  st.answers[st.ids[st.pos]] = a;
+  if (r.used_s !== undefined) st.usedS = r.used_s;
+  st.busy = false; st.t0 = null;
+  if (st.timeCap && st.usedS >= st.timeCap) return timeUp();
+  show(st.pos + 1);
+}
+
+function finish() {
+  st.mode = "done";
+  const vals = Object.values(st.answers), cnt = (k) => vals.filter(v => v === k).length;
+  card(`<h2>All done – thank you!</h2><p>${vals.length} of ${st.n} items answered
+    (0: ${cnt("0")}, 1: ${cnt("1")}, 2: ${cnt("2")}, 3: ${cnt("3")}, same sheet: ${cnt("s")}, unsure: ${cnt("u")}, open air: ${cnt("a")}).</p>
+    <p>Answers are saved in <code>${st.out}</code>. You can close this tab and stop the server (Ctrl-C).</p>
+    <p style="color:var(--dim)">Press <kbd>←</kbd> to go back and change an answer.</p>`);
+}
+
+function card(html) { $("card").innerHTML = html; $("overlay").style.display = "flex"; }
+function hideCard() { $("overlay").style.display = "none"; }
+
+// ---- tutorial -------------------------------------------------------------------------------------------
+function tutIntro() {
+  st.mode = "intro";
+  card(`<h2>Welcome – 2-minute tutorial</h2>
+  <p>You will see small pieces of a CT scan of a rolled-up papyrus scroll. The papyrus <b>sheets</b> (layers of the roll)
+  are the <b>bright bands</b>; the dark parts are air. Two points, <b style="color:var(--a)">A</b> and
+  <b style="color:var(--b)">B</b>, lie on a line going outward from the centre of the scroll. Each of them sits on a sheet.</p>
+  <p><b>Your question:</b> how many sheets lie <i>between</i> A and B? Do not count the sheets that A and B sit on.
+  Press the number (<kbd>0</kbd>, <kbd>1</kbd>, <kbd>2</kbd>, … up to <kbd>9</kbd>), <kbd>s</kbd> if A and B are on the
+  <i>same</i> sheet (rare), or <kbd>u</kbd> if you really can't tell.</p>
+  <p><b>Double bands:</b> if a ring sits on a band that is really two sheets touching, take the ring as sitting on
+  the <b>left</b> sheet of the pair (A is always on the left, the scroll centre is to the left).</p>
+  <p>Three views of the same spot: the <b>slice from above</b>, a <b>side view</b> (a vertical cut along the A–B line),
+  and a <b>brightness curve</b> along the line (bright peaks = sheets). The hard cases are sheets that <b>touch</b>: they
+  merge into one thick band. Follow each sheet in from the sides of the picture, where it is separate, to see whether
+  one or two of them run into the corridor.</p>
+  <p>In the tutorial you get feedback after each answer (red triangles mark the sheets between A and B).
+  Later items have no feedback. Speed matters a little (aim for 5–15 s per item), but accuracy matters more.</p>
+  <p style="text-align:center"><b>Press Enter to start.</b></p>`);
+}
+
+async function tutShow(i) {
+  st.mode = "tutorial"; st.tutIdx = i; st.tutAnswered = false; hideCard();
+  $("reveal").style.display = "none"; $("msg").textContent = ""; updateProgress();
+  st.busy = true;
+  st.tut = await api("/api/tutorial/" + i);
+  st.cur = st.tut; st.hiresOpened = st.hires;
+  render(); await whenLoaded(); st.t0 = performance.now(); st.busy = false;
+  $("msg").textContent = st.tut.title ? "Example: " + st.tut.title : "";
+  if (i + 1 < st.ntut) api("/api/tutorial/" + (i + 1)).then(preloadImgs);
+}
+
+function tutAnswer(a) {
+  if (st.tutAnswered) return tutNext();
+  const secs = (performance.now() - st.t0) / 1000;
+  const truth = String(st.tut.answer), ok = a === truth;
+  api("/api/tutorial_answer", {idx: st.tutIdx, answer: a, truth: truth, correct: ok, seconds: secs, hires_opened: st.hiresOpened});
+  st.tutAnswered = true;
+  const r = $("reveal"); r.className = ok ? "ok" : ""; r.style.display = "block";
+  r.innerHTML = `<b class="big">${ok ? "Correct" : "Not quite"}: the answer is ${truth}.</b><br>${st.tut.explain}
+    <br><br><span style="color:var(--dim)">Try <kbd>h</kbd> to compare the 2.4 µm view. Press <kbd>Enter</kbd> for the next example.</span>`;
+  render();
+}
+
+function tutNext() {
+  if (st.tutIdx + 1 < st.ntut) return tutShow(st.tutIdx + 1);
+  api("/api/tutorial_answer", {event: "tutorial_done"});
+  st.mode = "ready";
+  card(`<h2>Practice done</h2><p>From now on there is no feedback. ${st.timeCap ? `You have <b>${Math.round(st.timeCap / 60)} minutes</b>
+    of checking time (the clock at the top right runs only while an item is on screen); the session ends by itself.
+    Nobody expects you to finish all ${st.n} items.` : `${st.n} items in total.`} Your answers are saved after
+    every key press, and you can stop and resume at any time (just run the same command again).</p>
+    <p>Take your time on hard ones, and use <kbd>u</kbd> when you really cannot tell.</p>
+    <p style="text-align:center"><b>Press Enter to begin.</b></p>`);
+}
+
+// ---- keys -----------------------------------------------------------------------------------------------
+document.addEventListener("keydown", (e) => {
+  const k = e.key;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (st.mode === "intro" && k === "Enter") return tutShow(0);
+  if (st.mode === "ready" && k === "Enter") {
+    hideCard(); api("/api/event", {event: Object.keys(st.answers).length ? "resume" : "start", used_s: st.usedS});
+    return show(st.resume); }
+  if (st.mode === "done") { if (k === "ArrowLeft" || k === "Backspace") { hideCard(); show(st.n - 1); } return; }
+  if (st.mode === "tutorial" && k === "Enter" && st.tutAnswered) return tutNext();
+  if (/^[0-9]$/.test(k)) { e.preventDefault(); return answer(k); }
+  if (k === "u" || k === "U") return answer("u");
+  if ((k === "s" || k === "S") && st.mode === "main") return answer("s");
+  if ((k === "a" || k === "A") && st.mode === "main") return answer("a");
+  if (k === "h" || k === "H") { st.hires = !st.hires; if (st.hires) st.hiresOpened = true; return render(); }
+  if (k === "o" || k === "O") { st.overlay = !st.overlay; return render(); }
+  if (k === "c" || k === "C") { st.contrast = (st.contrast + 1) % CONTRASTS.length; return render(); }
+  if (k === "t" || k === "T") { st.resume = st.mode === "main" ? st.pos : st.resume; return tutIntro(); }
+  if (st.mode !== "main" || st.busy) return;
+  if (k === "ArrowLeft" || k === "Backspace" || k === "b") { e.preventDefault(); if (st.pos > 0) show(st.pos - 1); }
+  if (k === "ArrowRight") { if (st.ids[st.pos] in st.answers && st.pos + 1 < st.n) show(st.pos + 1); }
+});
+for (const b of document.querySelectorAll("#btns button")) b.addEventListener("click", () => answer(b.dataset.a));
+window.addEventListener("resize", () => render());
+
+// ---- start ----------------------------------------------------------------------------------------------
+(async function init() {
+  const s = await api("/api/state");
+  Object.assign(st, {n: s.n, ids: s.ids, answers: s.answers, out: s.out, ntut: s.n_tutorial, resume: s.first,
+                     timeCap: s.time_cap_s, usedS: s.used_s || 0});
+  const q = new URLSearchParams(location.search);   // test hooks: ?pos=N, ?tut=N&reveal=1, ?hires=1
+  if (q.get("hires") === "1") st.hires = true;
+  if (q.has("tut")) { await tutShow(Number(q.get("tut"))); if (q.get("reveal") === "1") tutAnswer(q.get("ans") || "1"); return; }
+  if (q.has("pos")) return show(Number(q.get("pos")));
+  if (!s.tutorial_done && s.n_tutorial > 0) return tutIntro();
+  if (st.timeCap && st.usedS >= st.timeCap) return timeUp();
+  itemMeta(s.first);
+  if (s.first >= s.n) return finish();
+  st.mode = "ready";
+  card(`<h2>Welcome back</h2><p>${Object.keys(s.answers).length} of ${s.n} items answered. Continuing at item
+    ${s.first + 1}.${st.timeCap ? ` Checking time used: ${fmt(st.usedS)} of ${fmt(st.timeCap)}.` : ""}</p><p style="text-align:center"><b>Press Enter to continue</b> (or <kbd>t</kbd> to replay the tutorial).</p>`);
+})();
+</script>
+</body>
+</html>
