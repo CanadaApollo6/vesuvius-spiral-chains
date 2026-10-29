@@ -365,3 +365,84 @@ B7 (A100 / A6000); none is A6000-only, so the planned A6000-only vs mixed spread
   applied, and the M2 chain-set sha; copies data/p1667_ws/z<z0>/{inputs, masks/m7_L2_th0.2.zarr} into a per-band
   HOME (data/scratch/wholescroll/local/home_z<z0>); guard 19,500 MiB; halts and releases the arm's claim on a guard
   stop or any failure.
+
+### 2026-10-29T17:31:00Z: final read-out (all s2 arms in); verdict PASS
+- **Inputs checked before scoring:** all 20 fresh-band arms have pulled.ok, meshes_step4 and a complete vertex dump
+  (data/scratch/wholescroll/vertex/<arm>.{npz,json,log}, the log ends with the summary dict); the B4/B6 s2 dumps
+  (ink2_bases2, ink2_m2s2, c1667_bases2, c1667_m2s2) exist. `sha256sum -c` of prereg_shas.txt: all match (incl.
+  eval/wholescroll_pool.py dfdb1f57...); concat of the 20 env files f3cb3da4...5e45e; the note up to the Log line
+  061f26a6... (= prereg_note_sha.txt); the 5 chain sets equal the shas logged above; every later script sha logged
+  above (run_band_prep2, prep_rest, watchdog, watchdog2, grab_coord 1-4, boot2/3, local_ws.sh) matches. The 6 local
+  arms (log data/scratch/wholescroll/local/local_ws.log, "2026-10-29T11:44:39Z local_ws done") each logged "run exit
+  0", "overrides ok" with optimizer_random_seed 2, and for M2 "chain set ... sha ok". Their dumps are new fits, not
+  copies: 14-61 % of reference vertices have a different residual than the s1 arm of the same band.
+- **Scoring (CPU, under flock /tmp/vss_eval.lock, unit vss-ws-score2):** `uv run python eval/wholescroll_pool.py
+  --pair s2 --bands fresh|all --out data/scratch/wholescroll/eval/pool_s2_{fresh,all}.json`, the same call as s1
+  (logs pool_s2_*.log, RC 0; sha256 fresh 0331398c..., all e18480b5...). Peak RSS ~3 GB. A first launch failed before
+  scoring anything (/usr/bin/time not installed, RC 127) and was relaunched without it.
+
+**Primary and pass rule (pooled over the 5 fresh bands):**
+| # | quantity | value | rule | |
+|---|---|---|---|---|
+| 1 | s1-s1 inner own-offset seam wrong area, M2 - base | 77.6 -> 35.0 %, -42.6 [-44.0, -41.3] | CI upper < 0 | **met** |
+| 2 | s1-s1 seam switches per 1000, M2 - base | -45.5 [-49.7, -41.7] | point <= +5 | **met** |
+| 3 | s2-s2 inner own-offset seam wrong area, M2 - base | 77.6 -> 35.0 %, **-42.6** [-44.0, -41.4] | point < 0 | **met** |
+
+**Verdict: PASS** (all 5 fresh bands have both pairs; not incomplete).
+
+Secondary, s2-s2 pooled fresh: switches 131.1 -> 80.3, -50.8 [-55.2, -46.7]; outer (k >= 34) -3.4 [-4.3, -2.5] (no
+outer regression); unmatched 27.5 -> 28.9 %, +1.5 [1.0, 1.9]; correctly numbered inner area 93.7 -> 270.7 cm^2
+(all-k 116.1 -> 295.5) of 558.5 cm^2 labelled inner (692.4 all-k); numbered fit area base 2636, M2 2233 cm^2.
+
+**Per band, seed pair s2** (inner own-offset wrong area %, bases2 -> m2s2):
+| band (L2 z) | fresh | base | M2 | diff [95 % CI] | switches diff | outer diff [CI] | pair rule | correct inner cm^2 base / M2 | GPUs (bases2 / m2s2) |
+|---|---|---|---|---|---|---|---|---|---|
+| 400-1500 | yes | 75.3 | 25.6 | -49.7 [-54.5, -44.4] | -53.6 | n/a | pass | 14 / 41 | 3090 / 3090 |
+| 1500-3000 | yes | 76.6 | 33.6 | -43.1 [-44.9, -41.1] | -54.4 | -3.2 [-5.6, -0.6] | pass | 28 / 80 | A6000 / 3090 |
+| 3000-4500 | yes | 79.3 | 20.5 | -58.8 [-61.1, -56.6] | -73.1 | -3.3 [-4.5, -2.0] | pass | 26 / 98 | A100 / 3090 |
+| 4500-6000 (test 8) | no | 78.8 | 25.5 | -53.4 [-54.4, -52.4] | -58.3 | -2.3 [-3.1, -1.4] | pass | 28 / 97 | L40S / A6000 |
+| 6000-6500 | yes | 77.8 | 27.9 | -50.0 [-51.2, -48.6] | -48.3 | -4.5 [-6.4, -2.5] | pass | 10 / 32 | 3090 / 3090 |
+| 6500-8000 (test 2) | no | 78.3 | 50.9 | -27.4 [-28.8, -26.1] | -62.8 | -6.2 [-8.2, -4.3] | pass | 26 / 58 | A6000 / A6000 |
+| 8000-9000 | yes | 78.5 | 72.0 | -6.4 [-8.1, -5.1] | -6.5 | -1.8 [-3.0, -0.4] | pass (marginal) | 15 / 19 | A100 PCIe / A6000 |
+"3090" = local RTX 3090 (deviation 2026-10-27T09:55:57Z). Fresh bands passing the per-band pair rule: s1 5 / 5,
+s2 5 / 5. B7 again passes only formally (M2 removes 6.4 pp; s1 3.4 pp).
+
+**Scroll-wide, all 7 bands, s2 (not fresh):** inner 78.0 -> 35.9 %, -42.0 [-43.0, -41.2]; switches 132.2 -> 77.7,
+-54.6 [-58.3, -51.3]; outer -3.9 [-4.5, -3.2]; unmatched +1.7 [1.3, 2.0]. Correctly numbered inner area 148.1 -> 426.7
+cm^2 (all-k 195.8 -> 479.7) of 891.4 labelled inner (1182.5 all-k); fit area (6 bands with meshes) base 3241, M2 2701.
+
+**GPU-type check (deviation 2026-10-26T11:08:06Z; descriptive, not part of the rule).** Pair types (base / M2):
+| band | s1 | s2 | inner diff s1 / s2 | abs(s1 - s2) | base abs(s1 - s2) | M2 abs(s1 - s2) |
+|---|---|---|---|---|---|---|
+| 400-1500 | A100 / A6000 MIXED | 3090 / 3090 same | -49.727 / -49.728 | 0.001 | 0.001 | 0.001 |
+| 1500-3000 | A6000 / A100 MIXED | A6000 / 3090 MIXED | -43.153 / -43.051 | 0.102 | 0.021 | 0.081 |
+| 3000-4500 | A6000 / RTX 6000 Ada MIXED | A100 / 3090 MIXED | -59.623 / -58.757 | 0.866 | 0.034 | 0.902 |
+| 4500-6000 (no) | A6000 / A6000 A6000-only | L40S / A6000 MIXED | -53.333 / -53.377 | 0.044 | 0.028 | 0.071 |
+| 6000-6500 | A100 / RTX 6000 Ada MIXED | 3090 / 3090 same | -52.807 / -49.952 | 2.855 | 0.007 | 2.848 |
+| 6500-8000 (no) | L40S / L40S same | A6000 / A6000 A6000-only | -28.158 / -27.432 | 0.726 | 0.553 | 0.172 |
+| 8000-9000 | A100 / A6000 MIXED | A100 PCIe / A6000 MIXED | -3.393 / -6.449 | 3.056 | 0.001 | 3.054 |
+- Flagged mixed-type pairs: s1 in B1, B2, B3, B5, B7; s2 in B2, B3, B4, B7. Every fresh band has at least one mixed
+  pair. Same-type pairs: B1 s2 and B5 s2 (both 3090), B6 s1 (L40S), B4 s1 and B6 s2 (A6000-only).
+- A6000-only vs mixed: the only A6000-only pairs are in the two not-fresh bands (B4 s1, B6 s2). The planned
+  comparison can therefore only be made on those two bands: seed spread abs(s1 - s2) of the inner diff is 0.044 and
+  0.726 pp there (mean 0.39) against 0.102, 0.866 and 3.056 pp (mean 1.34) in the bands where both pairs are mixed
+  (B2, B3, B7). n = 2 vs 3, so this is not evidence either way. The two bands with a 3090-only s2 pair have
+  spreads of 0.001 (B1) and 2.855 (B5). Base arms move <= 0.034 pp between seeds in every fresh band whatever the GPUs
+  (B6 0.553); the larger spreads are all in M2 (B5 2.85, B7 3.05), and those come from pairs on 3 different card types.
+- Rule outcome is not GPU-sensitive here: condition 3's point (-42.6) is 39 pp below its threshold, and every per-band
+  s2 diff has the same sign and pair-rule outcome as s1.
+
+**Cost (final): $60.80** = the 16 pod rows in the cost table above (row sum $60.81; created 2026-10-26, none after: the
+grab_coord log reports spend $60.80 up to its exit 2026-10-29T11:43:28Z "all arms pulled or given up") + $0 for the
+6 local RTX 3090 arms. With the noted datacrunch A100 bill rate ($2.2148 vs $2.16/h on 5 rows, $33.70) the billed
+total is ~$61.66. Cap $250 and internal stop $200 not reached.
+
+**Figure:** release/figures/p1667_wholescroll_overview.png redrawn with release/fig_p1667_wholescroll.py unchanged
+(it already draws s2 from pool_s2_all.json as hollow markers); bottom panel stays seed pair 1. Checked visually: no
+overlapping labels or markers.
+
+**Cleanup:** final Prime pod list (pods/prime.py pods()): 0 pods. grab_coord4.py and local_ws.sh had already exited.
+Stopped the idle units vss-ws-collect (pods/collect.sh, only pulls/terminates pods in this test's pods_full.tsv) and
+vss-ws-watchdog (pods/watchdog2.sh, only boot_wsf*.log pods) with `systemctl --user stop`. Leases: only
+vss-kp-local.json exists (another project; untouched); this test's vss-full-local lease was already released, so
+nothing was removed. vss-kp-local not touched.

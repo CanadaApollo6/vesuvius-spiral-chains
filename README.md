@@ -25,9 +25,10 @@ vertices, in percentage points (pp), method minus no-chain baseline. Negative is
   combinations: inner wrong-winding area fell by 27.4 to 29.3 pp. This is about 86 % of the gain from human-oracle
   chains. M2 was the secondary arm, and its choice was informed by a dry run. The primary arm (M1) failed.
   See `notes/2026-10-22-confirmation-region.md`.
-- **PHerc1667, whole scroll (7 bands, z 400-9000): provisional.** On the first seed pair, pooled over the 5 unseen
-  bands, inner wrong area fell from 77.6 % to 35.0 %. The gain is small in the top band (z 8000-9000), where the
-  fitter extrapolates the umbilicus. The second seed pair was still pending when this export was made.
+- **PHerc1667, whole scroll (7 bands, z 400-9000): passed.** Pooled over the 5 bands not used in development, inner
+  wrong area fell from 77.6 % to 35.0 % (-42.6 pp [-44.0, -41.3]) on the first seed pair, and by the same amount on
+  the second. Every band improved on both pairs. The gain is small in the top band (z 8000-9000, -6.4 pp), where the
+  fitter extrapolates the umbilicus. `release/figures/p1667_wholescroll_overview.png` shows both pairs.
   See `notes/2026-10-26-p1667-wholescroll-prereg.md` and `notes/2026-10-26-topband-umbilicus-prereg.md`.
 - **Kelly's patch index is more accurate than our numbering on Scroll 4.** We scored both on the same vertices.
   Kelly's index on Stevens' patches is right on 95.9 % of co-covered vertices, and our numbering on 73.2 %. It
