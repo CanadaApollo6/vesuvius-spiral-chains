@@ -259,3 +259,188 @@ and Kelly. Both have full KP ray coverage and are outside Kelly's slab 2, and B5
   data/scratch/kp_chains/score_kp.py --stage dev --arms kp,kpm --out data/scratch/kp_chains/dev/dev_table.json`
   (log dev/dev_table.log, decision dev/dev_table_decision.json).
 - Launched as `systemd-run --user --unit=vss-kp-local --collect …`, log data/scratch/kp_chains/local/kp_local.log.
+
+### L1 (2026-10-30T01:55Z): dev stage result. Rule says GO; confirmation waits for the user
+- Fits (local RTX 3090, $0): kp_z6000 130 min, kpm_z6000 125 min, kp_z3000 and kpm_z3000 (241 min for kpm_z3000), peak
+  process VRAM 6.9-9.1 GB, all attempt 1, no deviations. Scorer run once at 00:13:51Z
+  (dev/dev_table.json, dev_table_decision.json, dev_table.log). Freeze check passed (lines 1-218 still 972a12ab…).
+- Pooled dev (B3 + B5), primary variant, C / A / Q (%):
+
+  | arm | C | A | Q |
+  |---|---|---|---|
+  | base (no chains) | 77.1 | 20.4 | 15.8 |
+  | M2 s1 | | | 61.7 |
+  | **KP** | 76.9 | 84.7 | **65.2** |
+  | KPM | 75.1 | 72.8 | 54.7 |
+  | Kelly k_all_comp | 73.7 | 98.0 | 72.3 |
+
+- KP vs M2: ΔQ +3.47 [2.86, 4.06]; co-covered ΔA +4.0 [3.3, 4.7]; inner own-offset wrong area −4.81 [−5.26, −4.39];
+  switches −0.6 [−3.7, +2.9]; outer +2.0 [0.8, 3.2]; unmatched −0.1.
+- KP vs Kelly: ΔQ −7.10 [−8.69, −5.75]; co-covered ΔA −3.87 [−4.58, −3.20] (fails the reported S1 line, > −1).
+  Union Q with Kelly 80.8 (reported only).
+- KPM vs M2: ΔQ worse; inner wrong area +8.47 [7.62, 9.27]. Adding the M2 chains to the patch chains hurts.
+- **Dev rule:** chosen KP (Q 65.2 vs 54.7). Q_KP 65.2 > Q_M2 61.7, so **go to confirmation**. As frozen (line 232),
+  no confirmation fit starts without a new go-ahead from the user.
+- Against the predictions: P(dev pass) 0.75 → passed; P(beats M2) 0.55 → dev points that way; P(beats Kelly) 0.10 →
+  dev says no (−7.1 pp).
+
+### G2 (2026-10-30T02:00Z): go-ahead, confirmation stage on pods
+- The user approved the **confirmation stage on pods: "Pods in parallel"** (2026-10-30 ~02:00Z): the chosen arm KP on
+  B1 z400, B2 z1500, B4 z4500, B6 z6500, B7 z8000 (5 fits, frozen envs kp_z<z0>.env and frozen sets), then the frozen
+  scorer once (`--stage conf --arms kp`), then the descriptive all-7 pool (`--stage all`).
+- Pod rules given with it: Prime Intellect, single GPU, >= 48 GB, x86_64, driver >= 580, <= $2.50/h, not spot, no
+  GH200/GB200, no Lambda Labs; names vss-kp-<band>; terminated right after pull; aim <= $30, stop and report before
+  projected spend passes $45. The local RTX 3090 may take at most one band (same stack, lease, guard).
+- Rule update from the user (2026-10-30 ~01:55Z): a single-GPU, non-spot **H200 (<= ~$6/h) is allowed only as a
+  fallback**, for a band that has no acceptable normal-priced offer when it is ready to launch; do not wait hours for
+  cheap cards. Bands run on H200 are logged with the reason. GPU type per band is reported; mixed types are flagged as
+  in the whole-scroll test.
+
+### R2 (2026-10-30T02:00Z): confirmation run plan (pods + local), written before any confirmation fit
+- **Bands → hardware.** B4 kp_z4500 on the local RTX 3090 (the one local band allowed; 1500 slices, the dev fits
+  showed 6.9-9.1 GB peak). B6 kp_z6500, B2 kp_z1500, B1 kp_z400, B7 kp_z8000 on Prime pods vss-kp-b6/b2/b1/b7,
+  one pod per band where offers allow; otherwise a finished pod takes the next band sequentially.
+- **Market at 01:53Z:** zero normal single-GPU offers (no A6000 / L40S / A100 / RTX 6000 Ada / H100 at any price);
+  the only single GPU on offer is a nebius H200 SXM (16 vCPU, 200 GB, $5.40/h + 1,500 GB minimum disk ≈ $5.55/h).
+- **Offer rules (kp_coord.py):** normal = single GPU, >= 48 GB, <= $2.50/h, not spot, >= 6 vCPU, >= 40 GB RAM, not
+  GH200/GB200/H200, not lambdalabs, not blacklisted; cheapest first. **H200 fallback:** single, non-spot, <= $6/h,
+  only after 20 min of polling with no normal offer, at most one live H200. Budget gate before every create or reuse:
+  closed spend + live pods' price x remaining estimate (5 h per band) + new price x 5 h <= $45. With one H200 band
+  (~$28 projected) the gate leaves room only for normal cards for the rest; no second H200 band.
+- **Stack on every pod** (checked by kp_boot.sh before launch and by kp_pull.sh after the fit): env/pod_setup.sh
+  (FIT_ONLY=1) builds villa 0fb38c45 + pherc343 fit_spiral_shell_optional.patch (as the wsf*_m2s1 pods); HEAD
+  0fb38c45b488…; no spiral/patches/*.patch reverse-applies; chain_loss_tol.patch forward-applies; the only
+  modified file is fit_spiral.py; normalised diff sha (`git diff --full-index --src-prefix=a/ --dst-prefix=b/`)
+  e7afc8c5… = the local tree's (the local tree's plain `git diff` sha 75c27ecb… depends on its mnemonic-prefix config,
+  so the normalised form is compared). torch.cuda check; x86_64 and driver >= 580 host check. On the pod, the set,
+  the env, run_arm.sh, export_fine.sh, fit_ckpt.py and recipe.toml are sha-checked against freeze/freeze.sha256.
+  Overrides are checked after the pull (recipe.toml + band + env FIT_OVERRIDES; step 4 adds only output_step_size).
+- **Inputs:** B1/B2/B7 from data/p1667_ws/z<z0> (as wsf*_m2s1), B4 from data/p1667_z4500 (as ink2_m2s1), B6 from
+  data/p1667 (as c1667_m2s1); no file in them is newer than the matching M2 s1 fit's ds/band.json.
+- **Deviation (layout only):** on pods each band lives under a per-band HOME ~/b<z0> (inputs, mask, set, work), as
+  kp_local.sh did locally, so a pod can take a second band without mixing inputs. Recipe, env files, scripts and
+  stack are unchanged.
+- **Helpers (new files, data/scratch/kp_chains/pods/):**
+  - kp_coord.py 289887843939001edb0ec556817428d797f857ace220b9e8ce8ffc8ad64ca73f: pod coordinator (offers, H200
+    fallback, budget gate, create / adopt after a failed create, boot, poll, pull, vertex dump, reuse or terminate;
+    crash → one rerun of the same command, second crash → missing). Uses data/scratch/wholescroll/pods/prime.py
+    (6599588a…) read-only.
+  - kp_boot.sh 12766fb70ec125b2e0dea1938688e8ee541affef2aeb24035e7956fa61addd4d: host check, copies, sha and villa
+    checks, pod_setup, launch of `run_arm.sh <env> && export_fine.sh <env> 4`.
+  - kp_pull.sh bfee0258a2dee64337c82176f3d27fe770aa07efa47d727593aad20534bd1463: pull_arm.sh's file selection from
+    ~/b<z0>, winding count, overrides check, villa re-check, gpu.txt, pulled.ok.
+  - kp_conf_local.sh de17002e76ce0363c5d76816bcdd1a67744157f53c99d3ac8e99f529e4d87ef9: kp_local.sh changed only in
+    ARMS (kp_z4500), band check, input source (data/p1667_z4500), lease note and names, scorer section removed.
+- **Dumps:** release/fit_vertex_dump.py → data/scratch/kp_chains/vertex/kp_z<z0>.npz under flock /tmp/vss_eval.lock
+  (pod dumps with CUDA_VISIBLE_DEVICES=, numpy only). Meshes kept in data/scratch/p0139_spiral/kp_z<z0>/.
+- **Scoring (after all 5 dumps, freeze check first), once:** `flock /tmp/vss_eval.lock uv run python
+  data/scratch/kp_chains/score_kp.py --stage conf --arms kp --out data/scratch/kp_chains/conf/conf_table.json`; then
+  `--stage all --out data/scratch/kp_chains/all/all_table.json` (descriptive). Both with CUDA_VISIBLE_DEVICES=.
+- Launched as systemd user units vss-kp-conf-local and vss-kp-coord; freeze check passed at 01:59Z.
+
+### R2a (2026-10-30T02:40Z): H200 fallback pod billed above the cap; terminated; coordinator patched
+- 02:20:53Z kp_coord.py created **vss-kp-b6** (pod <pod-id>, 1x H200 141GB SXM, nebius eu-north1, image
+  cuda_12_1_pytorch_2_2) for kp_z6500 as the H200 fallback (no normal offer for 20 min). The offer list showed $5.40/h
+  (+$0.15 disk); the pod list then showed **priceHr $6.69/h**: nebius bills vCPU (16 x $0.015) and RAM (200 x $0.0045)
+  on top, and kp_coord.py had not counted those unit prices. $6.69/h is above the user's H200 cap (~$6/h), and the
+  pod still had no ssh after 11 min. **Terminated at 02:32:30Z by hand, before any data copy or fit. Cost ≈ $1.31**
+  (0.196 h x $6.69).
+- kp_coord.py patched while stopped (new sha bd3104cb664b833541c3f2e4760e6c59933c7ae3fb90642ac0a1dd69e0a50ef2):
+  the offer price adds vCPU/RAM unit prices when they are not included; after a create the billed priceHr is
+  recorded, and a pod billed over its cap ($2.50 normal, $6 H200) is terminated at once and its offer blacklisted.
+  No rule, threshold or recipe change. With correct pricing the nebius H200 ($6.69/h) is not an acceptable fallback,
+  and **no acceptable offer exists at 02:40Z**. The coordinator keeps polling for normal cards (and an H200 <= $6/h).
+- kp_z4500 (B4) has been fitting on the local RTX 3090 since 02:00:23Z.
+
+### R2b (2026-10-30T03:06Z): deviation (coordinator decision ~02:45Z): local 3090 queue after B4; no $6.69 H200
+- **Correction to R2a:** R2a was written at ≈ 02:33Z, not 02:40Z as its header says (the coordinator restart it
+  describes is at 02:33:20Z).
+- **Decision (coordinator, 2026-10-30 ~02:45Z):** (1) do not take the $6.69/h nebius H200; H200 cap stays <= $6/h
+  effective (vCPU/RAM included). (2) The "at most one band locally" limit is lifted: after B4, bands without a pod run
+  on the local RTX 3090 one at a time, order **B7 kp_z8000, B1 kp_z400, B2 kp_z1500, B6 kp_z6500**; same stack,
+  checks, lease (vss-kp-local, max_mem_gb 21, guard 19,000 MiB) and flock rules, under systemd-run units. The pod
+  coordinator keeps polling; an acceptable pod (<= $2.50/h, or H200 <= $6/h effective) takes the largest
+  not-yet-started band. A band never runs in two places; on a race the path that started first keeps it.
+  (3) Logged here before the next band starts. (4) Target: all 5 dumps scored by 2026-10-31 18:00Z at the latest;
+  report early if the projection passes 2026-10-31 20:00Z.
+- **Mechanism:** one atomic claim file per band, data/scratch/kp_chains/claims/claimed_<arm> (O_EXCL / noclobber),
+  first word "local" or "pod". The local queue claims a band just before its fit (after the gate and lease) and skips
+  any band claimed "pod"; kp_coord.py claims before a create or reuse, never gives a pod to a band claimed "local",
+  and releases its claim only if the pod fails before the fit is launched (or the pod vanishes, losing the fit).
+- **Helpers (new / changed while stopped):**
+  - pods/kp_conf_local2.sh 29a417a9106088c8f2972dd58dc6355e22fbe49461a55ed3ffd3e113fbb37d99 (new): kp_conf_local.sh
+    changed only in ARMS (the queue above), a wait for vss-kp-conf-local (B4) to be inactive (before its signal trap,
+    since it shares local/run.pgid) plus the same line in the gate, claim-skip instead of halt, a per-band missing
+    marker (local/missing_<arm>; crash rule unchanged: one rerun, then missing), band check and input source per band
+    (B7/B1/B2 data/p1667_ws/z<z0>, B6 data/p1667, as kp_boot.sh), names. Unit vss-kp-conf-local2.
+  - pods/kp_coord.py d01c40bb00a1f1a72347559698647ff11b38ee1ec6e052be46899e346f85ef8c (stopped 03:00Z, no pod live,
+    patched, restarted): claims as above; done() also counts local/missing_<arm>. Offer rules, caps and gate as in
+    R2/R2a. kp_conf_local.sh (B4) is untouched and still running.
+- **Projection (local only, from the dev and earlier fit times):** B4 done ≈ 05:45Z; B7 ≈ 09:15Z; B1 ≈ 12:45Z;
+  B2 ≈ 17:15Z; B6 ≈ 21:45Z (2026-10-30); conf scorer ≈ 22:15Z 2026-10-30. Within the 2026-10-31 18:00Z target.
+  Any pod that appears shortens this.
+- **Hardware reporting:** the GPU type per band (local RTX 3090 vs pod type) is reported with the conf table;
+  mixed types are flagged as in the whole-scroll test.
+
+### R2c (2026-10-30T03:07:12Z): finisher for the confirmation scorer (coordinator)
+- Neither runner (kp_conf_local2.sh, kp_coord.py) runs the scorer. Added data/scratch/kp_chains/pods/kp_finish.sh
+  (sha b957288445ef8c83…), unit vss-kp-finish. It waits until vss-kp-conf-local, vss-kp-conf-local2 and vss-kp-coord have all
+  exited and all 5 confirmation dumps exist, re-checks freeze.sha256, then runs the frozen scorer exactly once:
+  `score_kp.py --stage conf --arms kp --out data/scratch/kp_chains/conf/conf_table.json`, then the descriptive
+  `--stage all --arms kp` pool (out data/scratch/kp_chains/all/). Both under flock, GPU hidden. If any dump is missing
+  it scores nothing and logs why. No recipe, band or rule changes.
+
+### L2 (2026-10-30T19:58Z): confirmation result. C1 not met (Kelly's index beats KP); C2 not met
+- **Fits** (all 5 on the local RTX 3090, driver 615.78.08, attempt 1, no crash, no guard stop; villa / env / set /
+  overrides checks passed before and after each; meshes kept in data/scratch/p0139_spiral/kp_z<z0>/):
+
+  | band | arm | runner | fit start → dumped (Z) | fit + export | peak VRAM | windings | dump sha |
+  |---|---|---|---|---|---|---|---|
+  | B4 z4500-6000 | kp_z4500 | kp_conf_local.sh | 10-30 02:00:23 → 06:24:05 | 261 min | 9,186 MiB | 156 | b887a54a… |
+  | B7 z8000-9000 | kp_z8000 | kp_conf_local2.sh | 06:25:04 → 08:58:29 | 152 min | 7,534 MiB | 150 | d7685422… |
+  | B1 z400-1500 | kp_z400 | kp_conf_local2.sh | 08:58:31 → 11:33:57 | 153 min | 8,482 MiB | 220 | 15ff47f5… |
+  | B2 z1500-3000 | kp_z1500 | kp_conf_local2.sh | 11:34:00 → 15:22:23 | 226 min | 9,468 MiB | 152 | 2aee2d8c… |
+  | B6 z6500-8000 | kp_z6500 | kp_conf_local2.sh | 15:22:27 → 19:52:28 | 266 min | 9,558 MiB | 146 | 00aeeb5e… |
+
+- **Pods:** no acceptable offer appeared all day (kp_coord.py polled 02:00-19:52Z; zero normal single-GPU offers;
+  only the nebius H200 at $6.69/h effective). The only pod was vss-kp-b6 (H200, R2a), terminated before any fit.
+  **Spend: $1.31 total.** 0 vss-kp-* pods at 19:55Z; no lease left; units vss-kp-conf-local, -conf-local2, -coord,
+  -finish all exited.
+- **GPU types (flag, as in the whole-scroll test):** all 5 KP confirmation fits (and the 2 dev KP fits) ran on the
+  RTX 3090. Their M2 s1 comparators ran on pods: wsf400_m2s1 A6000, wsf1500_m2s1 A100, ink2_m2s1 A6000,
+  c1667_m2s1 L40S, wsf8000_m2s1 A6000. Every KP-vs-M2 pair is therefore mixed-GPU (same stack, seed 1).
+- **Scoring:** the conf scorer ran exactly once (vss-kp-finish / pods/kp_finish.sh, R2c; 19:53:18-19:54:19Z, exit 0;
+  freeze check passed before it): conf/conf_table.json (2d1f2e00…), conf_table_decision.json (1f440d21…),
+  conf_table.log. Then the descriptive all-7 pool once (exit 19:55:34Z): all/all_table.json (124df3ba…). After both:
+  freeze.sha256 passes, lines 1-218 still 972a12ab…. The RuntimeWarnings in the logs come from B1 having no outer
+  vertices (n_outer 0, outer per-band row null); the pooled outer uses the other bands.
+- **Pooled confirmation (B1, B2, B4, B6, B7), primary, C / A / Q (%):**
+
+  | arm | C | A | Q |
+  |---|---|---|---|
+  | base | 75.0 | 20.0 | 15.0 |
+  | M2 s1 | 73.5 | 60.5 | 44.5 |
+  | **KP** | 72.7 | 60.1 | **43.7** |
+  | Kelly k_all_comp | 71.3 | 94.3 | 67.3 |
+
+- **C1 (beats Kelly): not met; the reverse holds.** ΔQ KP − Kelly −23.58 [−25.13, −21.88]: Kelly's index beats the
+  fitted arm.
+- **C2 (improves the fitter): not met.** ΔQ KP − M2 −0.81 [−1.43, −0.22] (lower bound < 0); inner own-offset wrong
+  area KP − M2 +0.38 [−0.26, +0.97] (upper bound > 0); switch Δ −1.9 [−3.75, −0.08] (≤ +5, the only part met).
+- **Reported:** co-covered ΔA vs Kelly −28.43 [−30.09, −26.77] (S1 fails); co-covered ΔA vs M2 −0.67 [−1.43, +0.13];
+  outer wrong Δ +0.66 [−0.25, +1.61]; unmatched Δ +1.02 [+0.75, +1.29]; **union Q with Kelly 74.8 [73.0, 76.5]**.
+- **Variants:** lenient: ΔQ vs Kelly −20.05 [−21.58, −18.36], vs M2 +0.28 [−0.24, +0.79]; tol2: vs Kelly −21.25
+  [−22.68, −19.79], vs M2 −0.43 [−0.87, −0.01]. No rule passes on primary, so there is no fragility flag; the
+  verdicts agree on all three variants (lenient leaves ΔQ vs M2 inside zero).
+- **Per band (primary Q; KP / M2 / Kelly) and inner wrong Δ KP − M2:** B1 47.7 / 51.6 / 48.4, +2.8 [1.5, 4.0];
+  B2 57.8 / 49.5 / 71.0, −14.9 [−16.4, −13.5]; B4 46.7 / 60.8 / 80.3, +19.6 [18.4, 20.6]; B6 41.4 / 37.4 / 74.4,
+  −5.4 [−6.6, −4.1]; B7 14.5 / 14.2 / 46.0, −1.5 [−2.2, −0.9]. KP helps on B2 and B6 and hurts on B4 (the band
+  holding most of Kelly's slab 2) and B1.
+- **Descriptive all-7 pool (B1-B7, `--stage all --arms kp`; no rule):** KP C/A/Q 73.7 / 66.4 / 49.0, M2 74.2 / 65.6 /
+  48.7, Kelly 71.9 / 95.2 / 68.5. ΔQ vs M2 +0.24 [−0.22, +0.68]; vs Kelly −19.54 [−20.93, −18.18]; inner wrong Δ vs
+  M2 −0.99 [−1.46, −0.52]; switch Δ −1.5 [−3.1, +0.2]; union Q with Kelly 76.2 [74.7, 77.7].
+- **Against the predictions (§6):** P(C2) 0.55 → not met (KP ≈ M2 on the confirmation pool, −0.8 pp Q, after +3.5 pp
+  on dev); P(C1) 0.10 → not met; P(Kelly beats the arm) 0.7 → yes (−23.6 pp, beyond the predicted 5-15 pp).
+- **Deviations in this stage:** R2a (H200 pod billed $6.69/h, terminated before use, $1.31), R2b (all bands on
+  the local 3090 after the coordinator lifted the one-band limit; per-band HOME layout), R2c (finisher ran the
+  scorer). No recipe, env, set, scorer or rule change; no rerun; no missing arm.

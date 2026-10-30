@@ -50,10 +50,16 @@ vertices, in percentage points (pp), method minus no-chain baseline. Negative is
 - **Structure ablation (Paris4 z 7000-8500, dev band, one seed per arm): linking matters most.** Each arm removes
   one property of the oracle chains. Share of the oracle's gain recovered: long linked pieces thinned to our sheets
   1.04, our breaks with correct steps 0.54, every sheet cut short 0.38, our automatic chains 0.25. Once pieces are
-  linked, completeness adds nothing. This is a direction from one band, not a confirmed effect. See
-  `notes/2026-10-28-structure-ablation-prereg.md` and `release/figures/structure_ablation_p4z7.png`.
-- **Prepared but not run at export time:** the KP-chains test on Scroll 4 (`notes/2026-10-29-kp-chains-prereg.md`).
-  A timed human-check session is planned. Only its instructions are included (`notes/2026-10-24-hitl-session-howto.md`).
+  linked, completeness adds nothing. This is a direction from one band, not a confirmed effect, and the KP test
+  below did not carry it over to Scroll 4. See `notes/2026-10-28-structure-ablation-prereg.md` and
+  `release/figures/structure_ablation_p4z7.png`.
+- **Kelly-numbered patches as chains (KP, Scroll 4): failed on fresh bands.** KP chains are long and linked, the
+  shape the ablation favours. On the development bands they beat our chains by 3.5 pp in the share of labelled
+  inner surface numbered correctly (Q). On 5 fresh bands, pooled, they did not: Q 43.7 % vs 44.5 % for our chains
+  (-0.8 pp [-1.4, -0.2]), with no gain in inner wrong-winding area. Kelly's index on its own scores Q 67.3 %. So
+  feeding a ~94 % accurate index to the fitter gives a ~60 % accurate fit, the same as our chains: on Scroll 4 the
+  fitter, not chain quality, is the bottleneck. See `notes/2026-10-29-kp-chains-prereg.md` (log entry L2).
+- A timed human-check session is planned. Only its instructions are included (`notes/2026-10-24-hitl-session-howto.md`).
 
 Use `autowind` where the mask's sheet spacing is about 24 voxels or more. On tighter packing, first check step
 precision on a labelled patch. The full guide is `release/AUTOWIND.md`.
